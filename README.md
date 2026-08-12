@@ -68,7 +68,7 @@ Access: `next()` (returns `Future[T]`), `items`/`pairs` (yield futures),
 
 Combinators:
 
-- `map(fut: Future[T], fn)` / `flatMap(fut, fn)` - on single futures
+- `flatMap(fut, fn)` - on single futures
 - `map(iter: AsyncIter[T], fn)` - `fn: T -> Future[U]`, chains dispose
 - `mapAsync(iter: Iter[T], fn)` - lifts a sync `Iter` into `AsyncIter[U]`
 - `mapFilter(iter, mapPredicate)` / `filter(iter, predicate)` - async

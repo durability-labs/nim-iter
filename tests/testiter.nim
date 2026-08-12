@@ -72,7 +72,7 @@ suite "Test Iter":
 
     var collected: seq[string]
 
-    expect CatchableError:
+    expect IteratorError:
       for i in iter:
         collected.add(i)
 
@@ -91,7 +91,7 @@ suite "Test Iter":
 
     var collected: seq[int]
 
-    expect CatchableError:
+    expect IteratorError:
       for i in iter:
         collected.add(i)
 
@@ -113,10 +113,58 @@ suite "Test Iter":
 
     var collected: seq[string]
 
-    expect CatchableError:
+    expect IteratorError:
       for i in iter2:
         collected.add(i)
 
     check:
       collected == @["0", "1", "2"]
       iter2.finished
+
+  test "Should not nest IteratorError across combinators and should preserve the wrapped cause":
+    type UserError = object of CatchableError
+    let iter = Iter.new(0 ..< 5).map((i: int) => i).map(
+        proc(i: int): int =
+          if i < 3:
+            i
+          else:
+            raise newException(UserError, "boom")
+      )
+
+    var collected: seq[int]
+    var raised: ref IteratorError = nil
+    try:
+      for v in iter:
+        collected.add(v)
+    except IteratorError as e:
+      raised = e
+
+    check:
+      collected == @[0, 1, 2]
+      raised != nil
+      raised.parent != nil
+      raised.parent of UserError
+
+  test "Contract violation through a chain keeps parent == nil":
+    let iter = Iter.new(0 ..< 2).map((i: int) => i)
+    discard iter.next()
+    discard iter.next()
+    var raised: ref IteratorError = nil
+    try:
+      discard iter.next()
+    except IteratorError as e:
+      raised = e
+
+    check:
+      raised != nil
+      raised.parent == nil
+
+  test "Should flatMap each item using `flatMap`":
+    let iter = flatMap[int, int](
+      Iter.new(0 ..< 3),
+      proc(i: int): Iter[int] =
+        Iter.new(i ..< i + 2),
+    )
+
+    check:
+      iter.toSeq() == @[0, 1, 1, 2, 2, 3]

@@ -79,7 +79,7 @@ suite "Test AsyncIter":
 
     var collected: seq[string]
 
-    expect CatchableError:
+    expect IteratorError:
       for fut in iter2:
         collected.add(await fut)
 
@@ -101,7 +101,7 @@ suite "Test AsyncIter":
 
     var collected: seq[int]
 
-    expect CatchableError:
+    expect IteratorError:
       for fut in iter2:
         collected.add(await fut)
 
@@ -123,7 +123,7 @@ suite "Test AsyncIter":
 
     var collected: seq[string]
 
-    expect CatchableError:
+    expect IteratorError:
       for fut in iter2:
         collected.add(await fut)
 
@@ -160,3 +160,91 @@ suite "Test AsyncIter":
     check:
       collected == @["0", "1"]
       iter2.finished
+
+  test "Should not nest IteratorError across async combinators and should preserve the wrapped cause":
+    type UserError = object of CatchableError
+    let iter = map[int, string](
+      map[int, int](
+        AsyncIter[int].new(0 ..< 5),
+        proc(i: int): Future[int] {.async.} =
+          i,
+      ),
+      proc(i: int): Future[string] {.async.} =
+        if i < 3:
+          $i
+        else:
+          raise newException(UserError, "boom"),
+    )
+
+    var collected: seq[string]
+    var raised: ref IteratorError = nil
+    try:
+      for fut in iter:
+        collected.add(await fut)
+    except IteratorError as e:
+      raised = e
+
+    check:
+      collected == @["0", "1", "2"]
+      raised != nil
+      raised.parent != nil
+      raised.parent of UserError
+
+  test "Contract violation through an async chain keeps parent == nil":
+    let iter = map[int, int](
+      AsyncIter[int].new(0 ..< 2),
+      proc(i: int): Future[int] {.async.} =
+        i,
+    )
+    discard await iter.next()
+    discard await iter.next()
+    var raised: ref IteratorError = nil
+    try:
+      discard await iter.next()
+    except IteratorError as e:
+      raised = e
+
+    check:
+      raised != nil
+      raised.parent == nil
+
+  test "Should flatMap each item using `flatMap`":
+    let iter = flatMap[int, int](
+      AsyncIter[int].new(0 ..< 3),
+      proc(i: int): Future[AsyncIter[int]] {.async.} =
+        AsyncIter[int].new(i ..< i + 2),
+    )
+
+    var collected: seq[int]
+
+    for fut in iter:
+      collected.add(await fut)
+
+    check:
+      collected == @[0, 1, 1, 2, 2, 3]
+
+  test "Should propagate cancellation from a cancelled item":
+    let fut = newFuture[int]("testcollect")
+
+    let iter = map[int, int](
+      AsyncIter[int].new(0 ..< 3),
+      proc(i: int): Future[int] {.async.} =
+        if i == 1:
+          discard await fut
+        i,
+    )
+
+    proc cancelFut(): Future[void] {.async.} =
+      await sleepAsync(50.millis)
+      await fut.cancelAndWait()
+
+    asyncSpawn(cancelFut())
+
+    var raised = false
+    try:
+      discard await collectAsync(iter)
+    except CancelledError:
+      raised = true
+
+    check:
+      raised

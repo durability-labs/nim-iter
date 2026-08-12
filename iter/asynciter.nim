@@ -17,6 +17,13 @@
 ## 3. No concurrent dispose: Do NOT call dispose() concurrently or while next() is in-flight
 ## 4. After dispose: Calling next() will raise an error
 ##
+## ERROR MODEL:
+## As for `Iter`, the machinery fails futures with `IteratorError` only
+## (contract violations have `parent == nil`, wrapped user errors carry
+## their original exception in `parent`).  Additionally, futures may be
+## CANCELLED - cancellation is control flow, not an error, and is never
+## wrapped or swallowed.
+##
 ## Example:
 ##   let iter = createIterator()
 ##   defer: await iter.dispose()
@@ -61,13 +68,16 @@ proc dispose*[T](self: AsyncIter[T]): Future[void] {.async.} =
     self.finish
     await noCancel self.asyncDisposeImpl()
 
-proc map*[T, U](fut: Future[T], fn: Function[T, U]): Future[U] {.async.} =
-  let t = await fut
-  fn(t)
-
 proc flatMap*[T, U](fut: Future[T], fn: Function[T, Future[U]]): Future[U] {.async.} =
-  let t = await fut
-  await fn(t)
+  try:
+    let t = await fut
+    await fn(t)
+  except IteratorError as err:
+    raise err
+  except CancelledError as err:
+    raise err
+  except CatchableError as err:
+    raise toIteratorError(err)
 
 proc new*[T](
     _: type AsyncIter[T],
@@ -85,7 +95,7 @@ proc new*[T](
 
   proc next(): Future[T] {.async.} =
     if iter.disposed:
-      raise newException(CatchableError, "AsyncIter is disposed - cannot call next()")
+      raise newException(IteratorError, "AsyncIter is disposed - cannot call next()")
     if not iter.finished:
       var item: T
       try:
@@ -96,15 +106,14 @@ proc new*[T](
       except CatchableError as err:
         if finishOnErr or isFinished():
           iter.finish
-        raise err
+        raise toIteratorError(err)
 
       if isFinished():
         iter.finish
       return item
     else:
-      raise newException(
-        CatchableError, "AsyncIter is finished but next item was requested"
-      )
+      raise
+        newException(IteratorError, "AsyncIter is finished but next item was requested")
 
   if isFinished():
     iter.finish
@@ -152,28 +161,25 @@ proc empty*[T](_: type AsyncIter[T]): AsyncIter[T] =
 
   var disposed = false
 
-  proc genNext(): Future[T] {.raises: [CatchableError].} =
-    raise newException(CatchableError, "Next item requested from an empty AsyncIter")
+  proc genNext(): Future[T] {.raises: [IteratorError], closure.} =
+    raise newException(IteratorError, "Next item requested from an empty AsyncIter")
 
   proc isFinished(): bool =
     true
 
-  proc onDispose(): Future[void] {.async.} =
-    disposed = true
-
   proc isDisposed(): bool =
     disposed
 
-  AsyncIter[T].new(genNext, isFinished, onDispose, isDisposed)
+  AsyncIter[T].new(
+    genNext,
+    isFinished,
+    dispose = proc(): Future[void] {.async.} =
+      disposed = true,
+    isDisposed,
+  )
 
 proc map*[T, U](iter: AsyncIter[T], fn: Function[T, Future[U]]): AsyncIter[U] =
-  # Chain dispose to underlying iterator
-  AsyncIter[U].new(
-    genNext = () => iter.next().flatMap(fn),
-    isFinished = () => iter.finished,
-    dispose = () => iter.dispose(),
-    isDisposed = () => iter.disposed,
-  )
+  multiSync(AsyncIter[U], T, U, iter, fn)
 
 proc mapFilter*[T, U](
     iter: AsyncIter[T], mapPredicate: Function[T, Future[Option[U]]]
@@ -194,7 +200,7 @@ proc mapFilter*[T, U](
         raise err
       except CatchableError as err:
         let errFut = newFuture[U]("AsyncIter.mapFilterAsync")
-        errFut.fail(err)
+        errFut.fail(toIteratorError(err))
         nextFutU = some(errFut)
         break
 
@@ -217,7 +223,7 @@ proc mapFilter*[T, U](
 
 proc filter*[T](
     iter: AsyncIter[T], predicate: Function[T, Future[bool]]
-): Future[AsyncIter[T]] {.async: (raises: [CancelledError]).} =
+): Future[AsyncIter[T]] {.async.} =
   proc wrappedPredicate(t: T): Future[Option[T]] {.async.} =
     if await predicate(t):
       some(t)
@@ -226,6 +232,22 @@ proc filter*[T](
 
   # mapFilter already chains dispose to iter
   await mapFilter[T, T](iter, wrappedPredicate)
+
+proc flatMap*[T, U](
+    iter: AsyncIter[T], fn: Function[T, Future[AsyncIter[U]]]
+): AsyncIter[U] =
+  ## Applies `fn` to each item, flattening the returned async iterators
+  ## into a single stream.  Inner iterators are owned by `fn`'s caller -
+  ## dispose them alongside the source via the chained dispose.
+  multiSyncFlatMap(
+    AsyncIter[U],
+    T,
+    U,
+    iter,
+    fn,
+    syncAdvance = fn(iter.next()),
+    asyncAdvance = await fn(await iter.next()),
+  )
 
 proc delayBy*[T](iter: AsyncIter[T], d: Duration): AsyncIter[T] =
   ## Delays emitting each item by given duration
@@ -244,12 +266,18 @@ proc collectAsync*[T](
 ): Future[?!seq[T]] {.async: (raises: [CancelledError]).} =
   ## Collect all items of an async iterator into a seq.
   ## The first failing item aborts the collection and returns the failure
-  ## (`catch` re-raises `CancelledError`).
+  ## (an `IteratorError` - `parent` discriminates wrapped user errors from
+  ## contract violations).  `catch` captures CancelledError too; it is
+  ## re-raised here so cancellation stays control flow and never becomes a
+  ## returned error.
   ##
   ## Named `collectAsync` (not `collect`) so it never collides with the
   ## std/sugar `collect` template when both are in scope.
   ##
   var res: seq[T]
   for item in iter:
-    res.add(?(catch(await item)))
+    let captured = catch(await item)
+    if captured.isErr and captured.error of CancelledError:
+      raise (ref CancelledError)(captured.error)
+    res.add(?(captured))
   success res
