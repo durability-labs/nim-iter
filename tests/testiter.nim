@@ -5,7 +5,7 @@ import pkg/questionable
 import pkg/chronos
 import pkg/iter
 
-import ./asynctest
+import pkg/asynctest/chronos/unittest2
 
 suite "Test Iter":
   test "Should be finished":

@@ -1,3 +1,9 @@
+## Copyright (c) 2026 Archivist Authors
+## Licensed under either of
+##  * Apache License, version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+##  * MIT license ([LICENSE-MIT](LICENSE-MIT))
+## at your option.
+
 ## AsyncIter[T] - Asynchronous iterator with mandatory disposal
 ##
 ## Similar to `Iter[Future[T]]` with addition of methods specific to asynchronous processing.
