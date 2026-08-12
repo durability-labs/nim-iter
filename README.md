@@ -52,9 +52,10 @@ for n in doubled:
 
 ## `AsyncIter[T]` - asynchronous
 
-`AsyncIter[T]` is `Iter[Future[T]]` plus async-aware combinators. The
-dispose contract is async: `await iter.dispose()` (wrapped in `noCancel` so
-cleanup completes even if the caller is cancelled).
+`AsyncIter[T]` extends `Iter[Future[T]]`: it inherits the finished-state
+machinery and the `items`/`pairs` iterators, and adds an async dispose
+contract (`await iter.dispose()`, wrapped in `noCancel` so cleanup
+completes even if the caller is cancelled).
 
 Construction:
 

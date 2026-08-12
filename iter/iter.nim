@@ -32,7 +32,7 @@ type
   GenNext*[T] = proc(): T {.raises: [CatchableError], gcsafe, closure.}
   Iterator[T] = iterator (): T
 
-  IterObj[T] = object
+  IterObj[T] = object of RootObj
     finished: bool
     next*: GenNext[T]
     disposeImpl: Dispose
@@ -51,7 +51,12 @@ proc finished*[T](self: Iter[T]): bool =
   self.finished
 
 proc disposed*[T](self: Iter[T]): bool =
-  self.disposedImpl()
+  # AsyncIter subclasses carry their own async dispose state; the base
+  # callbacks stay nil on those instances.
+  if self.disposeImpl == nil:
+    false
+  else:
+    self.disposedImpl()
 
 proc dispose*[T](self: Iter[T]) =
   ## Dispose the iterator and release any underlying resources.
@@ -60,7 +65,8 @@ proc dispose*[T](self: Iter[T]) =
   ## Sets finished = true to prevent further iteration.
   if not self.disposed:
     self.finished = true
-    self.disposeImpl()
+    if self.disposeImpl != nil:
+      self.disposeImpl()
 
 iterator items*[T](self: Iter[T]): T =
   while not self.finished:

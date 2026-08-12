@@ -4,9 +4,12 @@
 ##  * MIT license ([LICENSE-MIT](LICENSE-MIT))
 ## at your option.
 
-## AsyncIter[T] - Asynchronous iterator with mandatory disposal
+## AsyncIter[T] - Asynchronous iterator extending Iter[Future[T]]
 ##
-## Similar to `Iter[Future[T]]` with addition of methods specific to asynchronous processing.
+## Inherits the sync machinery (finished state, next field, items/pairs
+## iterators) from `Iter[Future[T]]`; the disposal contract is async, so
+## the subclass adds its own async dispose state and shadows `dispose`/
+## `disposed` with async versions.
 ##
 ## USAGE CONTRACT:
 ## 1. Single-consumer: Do NOT call next() concurrently from multiple tasks
@@ -35,11 +38,9 @@ type
   AsyncDispose* = proc(): Future[void] {.async, gcsafe, closure.}
   AsyncIsDisposed* = proc(): bool {.raises: [], gcsafe, closure.}
 
-  AsyncIter*[T] = ref object
-    finished: bool
-    next*: GenNext[Future[T]]
-    disposeImpl: AsyncDispose
-    disposedImpl: AsyncIsDisposed
+  AsyncIter*[T] = ref object of Iter[Future[T]]
+    asyncDisposeImpl: AsyncDispose
+    asyncDisposedImpl: AsyncIsDisposed
 
 proc defaultAsyncDispose(): Future[void] {.async.} =
   discard
@@ -47,14 +48,8 @@ proc defaultAsyncDispose(): Future[void] {.async.} =
 proc defaultAsyncIsDisposed(): bool =
   false
 
-proc finish*[T](self: AsyncIter[T]): void =
-  self.finished = true
-
-proc finished*[T](self: AsyncIter[T]): bool =
-  self.finished
-
 proc disposed*[T](self: AsyncIter[T]): bool =
-  self.disposedImpl()
+  self.asyncDisposedImpl()
 
 proc dispose*[T](self: AsyncIter[T]): Future[void] {.async.} =
   ## Dispose the iterator and release any underlying resources.
@@ -63,18 +58,8 @@ proc dispose*[T](self: AsyncIter[T]): Future[void] {.async.} =
   ## Sets finished = true to prevent further iteration.
   ## Uses noCancel to ensure cleanup completes even if caller is cancelled.
   if not self.disposed:
-    self.finished = true
-    await noCancel self.disposeImpl()
-
-iterator items*[T](self: AsyncIter[T]): Future[T] =
-  while not self.finished:
-    yield self.next()
-
-iterator pairs*[T](self: AsyncIter[T]): tuple[key: int, val: Future[T]] {.inline.} =
-  var i = 0
-  while not self.finished:
-    yield (i, self.next())
-    inc(i)
+    self.finish
+    await noCancel self.asyncDisposeImpl()
 
 proc map*[T, U](fut: Future[T], fn: Function[T, U]): Future[U] {.async.} =
   let t = await fut
@@ -92,11 +77,11 @@ proc new*[T](
     isDisposed: AsyncIsDisposed = defaultAsyncIsDisposed,
     finishOnErr: bool = true,
 ): AsyncIter[T] =
-  ## Creates a new Iter using elements returned by supplier function `genNext`.
+  ## Creates a new AsyncIter using elements returned by supplier function `genNext`.
   ## Iter is finished whenever `isFinished` returns true.
   ## Caller is responsible for calling `dispose()` when done with the iterator.
 
-  var iter = AsyncIter[T](disposeImpl: dispose, disposedImpl: isDisposed)
+  var iter = AsyncIter[T](asyncDisposeImpl: dispose, asyncDisposedImpl: isDisposed)
 
   proc next(): Future[T] {.async.} =
     if iter.disposed:
