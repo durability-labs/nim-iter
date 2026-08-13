@@ -18,9 +18,8 @@
 ## 4. After dispose: Calling next() will raise an error
 ##
 ## ERROR MODEL:
-## As for `Iter`, the machinery fails futures with `IteratorError` only
-## (contract violations have `parent == nil`, wrapped user errors carry
-## their original exception in `parent`).  Additionally, futures may be
+## The `Iter` error model applies unchanged (see `iter`): the machinery
+## fails futures with `IteratorError` only.  Additionally, futures may be
 ## CANCELLED - cancellation is control flow, not an error, and is never
 ## wrapped or swallowed.
 ##
