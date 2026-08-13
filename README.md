@@ -70,6 +70,81 @@ let delayed = it.delayBy(50.milliseconds)
 let results = await collectAsync(delayed)
 ```
 
+## Real-world example
+
+Streaming a paginated remote record set: lift a sync page-number range into an async fetch, flatten the pages into one record stream, filter out the small records and collect the ids of the rest. `dispose()` is deferred so cleanup runs even when the pipeline is cancelled.
+
+```nim
+import std/sugar
+
+import pkg/chronos
+import pkg/iter
+
+type
+  Record = object
+    id: int
+    bytes: int
+
+# Simulated paged remote store: each page arrives after a network-like delay.
+proc fetchPage(page: int): Future[seq[Record]] {.async.} =
+  await sleepAsync(1.milliseconds)
+  @[
+    Record(id: page * 10 + 0, bytes: page + 1),
+    Record(id: page * 10 + 1, bytes: page + 2),
+  ]
+
+proc records(): AsyncIter[Record] =
+  # Fetch pages 0..2 and flatten each page into a single record stream.
+  flatMap[seq[Record], Record](
+    mapAsync[int, seq[Record]](Iter[int].new(0 ..< 3), fetchPage),
+    proc(page: seq[Record]): Future[AsyncIter[Record]] {.async.} =
+      var i = 0
+      AsyncIter[Record].new(
+        proc(): Future[Record] {.async.} =
+          let item = page[i]
+          inc i
+          item,
+        proc(): bool {.gcsafe, raises: [].} = i >= page.len,
+      )
+  )
+
+proc main() {.async.} =
+  let iter = records()
+  defer: await iter.dispose()   # mandatory; runs even on cancellation
+
+  let filtered = await filter[Record](
+    iter,
+    proc(r: Record): Future[bool] {.async.} =
+      r.bytes > 1,
+  )
+  let kept = await collectAsync(
+    map[Record, int](
+      filtered,
+      proc(r: Record): Future[int] {.async.} =
+        r.id,
+    )
+  )
+  doAssert kept == @[1, 10, 11, 20, 21]
+
+when isMainModule:
+  waitFor main()
+```
+
+Notes:
+
+- **Explicit type arguments**: combinators take them (`mapAsync[int, seq[Record]]`) - the `Function[T, Future[U]]` callback type does not reliably infer `U`.
+- **`filter`/`mapFilter` are async constructors**: they return `Future[AsyncIter[T]]` (construction fetches the first matching element), so await them before chaining.
+- **Error model**: the first failing item aborts `collectAsync` with an `IteratorError` whose `parent` carries the wrapped cause.
+
+  ```nim
+  try:
+    let kept = await collectAsync(iter)
+  except IteratorError as err:
+    echo err.parent.msg
+  ```
+
+- **`flatMap` needs non-empty inner iterators**: an empty inner iterator exhausts the source with `IteratorError`.
+
 ## Install
 
 ```bash
