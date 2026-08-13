@@ -65,7 +65,7 @@ Combinators:
 
 ```nim
 let it = AsyncIter[int].new(0 ..< 10)
-defer: discard await it.dispose()
+defer: await it.dispose()
 let delayed = it.delayBy(50.milliseconds)
 let results = await collectAsync(delayed)
 ```
