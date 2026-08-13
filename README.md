@@ -75,8 +75,9 @@ Combinators:
   predicates; return `Future[AsyncIter[U]]` (construction fetches the
   first matching element)
 - `delayBy(iter, duration)` - delays each item
-- `collectAsync(iter)` - `Future[?!seq[T]]`, first failing item aborts the
-  collection and returns the failure
+- `collectAsync(iter)` - `Future[seq[T]]`, the async analog of sync
+  `toSeq(iter)`; the first failing item aborts the collection and its
+  error propagates (raised, never returned as a value)
 
 `collectAsync` is named `collectAsync` (not `collect`) so it never collides
 with the `std/sugar` `collect` template when both are in scope.
@@ -85,7 +86,7 @@ with the `std/sugar` `collect` template when both are in scope.
 let it = AsyncIter[int].new(0 ..< 10)
 defer: discard await it.dispose()
 let delayed = it.delayBy(50.milliseconds)
-let results = ?await collectAsync(delayed)
+let results = await collectAsync(delayed)
 ```
 
 ## Install

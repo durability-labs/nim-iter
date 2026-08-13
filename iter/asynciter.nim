@@ -260,15 +260,12 @@ proc delayBy*[T](iter: AsyncIter[T], d: Duration): AsyncIter[T] =
       t,
   )
 
-proc collectAsync*[T](
-    iter: AsyncIter[T]
-): Future[?!seq[T]] {.async: (raises: [CancelledError]).} =
-  ## Collect all items of an async iterator into a seq.
-  ## The first failing item aborts the collection and returns the failure
-  ## (an `IteratorError` - `parent` discriminates wrapped user errors from
-  ## contract violations).  `catch` captures CancelledError too; it is
-  ## re-raised here so cancellation stays control flow and never becomes a
-  ## returned error.
+proc collectAsync*[T](iter: AsyncIter[T]): Future[seq[T]] {.async: (raises: [IteratorError, CancelledError]).} =
+  ## Collect all items of an async iterator into a seq - the async analog
+  ## of sync `toSeq(iter)`.  The first failing item aborts the collection:
+  ## its `IteratorError` propagates (`parent` discriminates contract
+  ## violations from wrapped user errors), and cancellation propagates as
+  ## control flow - errors are raised, never returned as values.
   ##
   ## Named `collectAsync` (not `collect`) so it never collides with the
   ## std/sugar `collect` template when both are in scope.
@@ -276,7 +273,9 @@ proc collectAsync*[T](
   var res: seq[T]
   for item in iter:
     let captured = catch(await item)
-    if captured.isErr and captured.error of CancelledError:
-      raise (ref CancelledError)(captured.error)
-    res.add(?(captured))
-  success res
+    if captured.isErr:
+      if captured.error of CancelledError:
+        raise (ref CancelledError)(captured.error)
+      raise (ref IteratorError)(captured.error)
+    res.add(captured.value)
+  res
