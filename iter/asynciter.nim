@@ -260,7 +260,9 @@ proc delayBy*[T](iter: AsyncIter[T], d: Duration): AsyncIter[T] =
       t,
   )
 
-proc collectAsync*[T](iter: AsyncIter[T]): Future[seq[T]] {.async: (raises: [IteratorError, CancelledError]).} =
+proc collectAsync*[T](
+    iter: AsyncIter[T]
+): Future[seq[T]] {.async: (raises: [IteratorError, CancelledError]).} =
   ## Collect all items of an async iterator into a seq - the async analog
   ## of sync `toSeq(iter)`.  The first failing item aborts the collection:
   ## its `IteratorError` propagates (`parent` discriminates contract
